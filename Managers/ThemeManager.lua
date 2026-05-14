@@ -1,8 +1,10 @@
 --[[
     BorcaUIHub — Managers/ThemeManager.lua
-    Pengatur perubahan warna real-time di seluruh UI.
-    Menjadi jembatan antara Theme.lua dan semua komponen visual.
-    Ketika accent color atau tema diganti, semua elemen yang terhubung ikut berubah.
+
+    FIX:
+    - Tambah _initialized flag: Init() hanya jalan sekali
+    - Cegah double-init dari SaveManager.Init lalu Loader.Init (dua kali)
+    - Listeners tidak lagi fire dua kali untuk set tema/accent yang sama
 ]]
 
 local ThemeManager = {}
@@ -15,23 +17,42 @@ local Config = require(script.Parent.Parent.UI.Config)
 -- ============================================================
 
 ThemeManager._currentTheme  = "Dark"
-ThemeManager._currentAccent = nil   -- Color3 | nil (nil = pakai preset default)
-ThemeManager._listeners     = {}    -- { id = string, fn = function }
+ThemeManager._currentAccent = nil
+ThemeManager._listeners     = {}
 ThemeManager._listenerCount = 0
+
+-- FIX: flag untuk cegah double init
+ThemeManager._initialized   = false
 
 -- ============================================================
 -- INIT
+-- FIX: hanya jalankan sekali; panggilan kedua diabaikan
 -- ============================================================
 
---[[
-    ThemeManager.Init(savedTheme, savedAccent)
-    Inisialisasi ThemeManager dengan tema dan accent yang tersimpan.
-    Dipanggil oleh SaveManager saat memuat config.
-
-    @param savedTheme   string | nil   -- nama preset
-    @param savedAccent  string | nil   -- hex string accent (#RRGGBB)
-]]
 function ThemeManager.Init(savedTheme, savedAccent)
+    -- FIX: guard double init
+    if ThemeManager._initialized then
+        -- Kalau dipanggil lagi (dari Loader setelah SaveManager), cukup apply
+        -- tema/accent yang diberikan tanpa reset listener
+        if savedTheme and Theme.Presets[savedTheme] then
+            ThemeManager.Apply(savedTheme, true)
+        end
+        if savedAccent then
+            local ok, color = pcall(function()
+                local hex = savedAccent:gsub("#", "")
+                return Color3.new(
+                    tonumber(hex:sub(1,2), 16) / 255,
+                    tonumber(hex:sub(3,4), 16) / 255,
+                    tonumber(hex:sub(5,6), 16) / 255
+                )
+            end)
+            if ok then ThemeManager.SetAccent(color, true) end
+        end
+        return
+    end
+
+    ThemeManager._initialized = true
+
     if savedTheme and Theme.Presets[savedTheme] then
         ThemeManager.Apply(savedTheme, true)
     end
@@ -39,14 +60,13 @@ function ThemeManager.Init(savedTheme, savedAccent)
     if savedAccent then
         local ok, color = pcall(function()
             local hex = savedAccent:gsub("#", "")
-            local r = tonumber(hex:sub(1,2), 16) / 255
-            local g = tonumber(hex:sub(3,4), 16) / 255
-            local b = tonumber(hex:sub(5,6), 16) / 255
-            return Color3.new(r, g, b)
+            return Color3.new(
+                tonumber(hex:sub(1,2), 16) / 255,
+                tonumber(hex:sub(3,4), 16) / 255,
+                tonumber(hex:sub(5,6), 16) / 255
+            )
         end)
-        if ok then
-            ThemeManager.SetAccent(color, true)
-        end
+        if ok then ThemeManager.SetAccent(color, true) end
     end
 end
 
@@ -54,13 +74,6 @@ end
 -- THEME SWITCHING
 -- ============================================================
 
---[[
-    ThemeManager.Apply(themeName, silent)
-    Terapkan preset tema ke seluruh UI.
-
-    @param themeName  string   -- "Dark" | "Midnight" | "Light" | nama kustom
-    @param silent     boolean  -- jika true, tidak trigger listener
-]]
 function ThemeManager.Apply(themeName, silent)
     if not Theme.Presets[themeName] then
         warn("[BorcaUIHub][ThemeManager] Tema tidak ditemukan: " .. tostring(themeName))
@@ -70,7 +83,6 @@ function ThemeManager.Apply(themeName, silent)
     ThemeManager._currentTheme = themeName
     Theme.Set(themeName)
 
-    -- Terapkan ulang accent kustom jika ada
     if ThemeManager._currentAccent then
         Theme.SetAccent(ThemeManager._currentAccent)
     end
@@ -82,13 +94,8 @@ function ThemeManager.Apply(themeName, silent)
     return true
 end
 
---[[
-    ThemeManager.Next()
-    Rotasi ke tema berikutnya dalam daftar preset.
-    Berguna untuk tombol cycle theme.
-]]
 function ThemeManager.Next()
-    local names = Theme.GetPresetNames()
+    local names   = Theme.GetPresetNames()
     local current = ThemeManager._currentTheme
     local nextTheme = names[1]
 
@@ -107,14 +114,6 @@ end
 -- ACCENT COLOR
 -- ============================================================
 
---[[
-    ThemeManager.SetAccent(color, silent)
-    Ubah warna accent secara real-time.
-    Semua komponen yang menggunakan Theme.Get("Accent") akan ikut berubah.
-
-    @param color   Color3
-    @param silent  boolean
-]]
 function ThemeManager.SetAccent(color, silent)
     if typeof(color) ~= "Color3" then
         warn("[BorcaUIHub][ThemeManager] SetAccent membutuhkan Color3")
@@ -129,10 +128,6 @@ function ThemeManager.SetAccent(color, silent)
     end
 end
 
---[[
-    ThemeManager.ResetAccent()
-    Kembalikan warna accent ke default preset yang aktif.
-]]
 function ThemeManager.ResetAccent()
     ThemeManager._currentAccent = nil
     local preset = Theme.Presets[ThemeManager._currentTheme]
@@ -142,25 +137,14 @@ function ThemeManager.ResetAccent()
     end
 end
 
---[[
-    ThemeManager.GetAccent() → Color3
-    Kembalikan warna accent saat ini.
-]]
 function ThemeManager.GetAccent()
     return ThemeManager._currentAccent or Theme.Get("Accent")
 end
 
 -- ============================================================
--- OVERRIDE INDIVIDUAL COLOR
+-- OVERRIDE
 -- ============================================================
 
---[[
-    ThemeManager.OverrideColor(key, color)
-    Override satu warna saja tanpa mengganti tema.
-
-    @param key    string
-    @param color  Color3
-]]
 function ThemeManager.OverrideColor(key, color)
     Theme.Override(key, color)
     ThemeManager._Notify("override", { key = key, color = color })
@@ -170,29 +154,14 @@ end
 -- CUSTOM PRESETS
 -- ============================================================
 
---[[
-    ThemeManager.AddPreset(name, colorTable)
-    Tambahkan preset tema kustom.
-
-    @param name        string
-    @param colorTable  table  -- { Key = Color3, ... }
-]]
 function ThemeManager.AddPreset(name, colorTable)
     Theme.AddPreset(name, colorTable)
 end
 
---[[
-    ThemeManager.GetPresets() → {string}
-    Kembalikan daftar semua nama preset.
-]]
 function ThemeManager.GetPresets()
     return Theme.GetPresetNames()
 end
 
---[[
-    ThemeManager.GetCurrentTheme() → string
-    Nama tema yang sedang aktif.
-]]
 function ThemeManager.GetCurrentTheme()
     return ThemeManager._currentTheme
 end
@@ -201,14 +170,6 @@ end
 -- LISTENERS
 -- ============================================================
 
---[[
-    ThemeManager.OnChanged(callback) → disconnectFn
-    Daftarkan callback yang dipanggil saat tema atau accent berubah.
-
-    @param callback  function(changeType: string, value: any)
-        changeType: "theme" | "accent" | "override"
-    @return disconnectFn
-]]
 function ThemeManager.OnChanged(callback)
     ThemeManager._listenerCount += 1
     local id = "listener_" .. ThemeManager._listenerCount
@@ -229,10 +190,6 @@ end
 -- SERIALIZATION
 -- ============================================================
 
---[[
-    ThemeManager.Serialize() → table
-    Kembalikan state tema saat ini dalam format yang bisa disimpan.
-]]
 function ThemeManager.Serialize()
     local accentHex = nil
     if ThemeManager._currentAccent then
@@ -243,11 +200,22 @@ function ThemeManager.Serialize()
             math.floor(c.B * 255)
         )
     end
-
     return {
         theme  = ThemeManager._currentTheme,
         accent = accentHex,
     }
+end
+
+-- ============================================================
+-- RESET (untuk testing / logout)
+-- ============================================================
+
+function ThemeManager.Reset()
+    ThemeManager._initialized   = false
+    ThemeManager._currentTheme  = "Dark"
+    ThemeManager._currentAccent = nil
+    ThemeManager._listeners     = {}
+    ThemeManager._listenerCount = 0
 end
 
 return ThemeManager

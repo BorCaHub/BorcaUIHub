@@ -1,12 +1,15 @@
 --[[
     BorcaUIHub — Managers/SaveManager.lua
 
-    FIX:
+    FIX (Fix 7):
     - SaveManager.Init() TIDAK lagi memanggil ThemeManager.Init()
-      (sebelumnya menyebabkan double init karena Loader juga memanggilnya)
-    - SaveManager hanya baca + tulis data; Loader yang memutuskan kapan
-      ThemeManager.Init() dipanggil menggunakan data dari SaveManager
-    - Fungsi GetValue() ditambahkan untuk Loader bisa baca themeName & accentHex
+      SEBELUMNYA: SaveManager.Init() memanggil ThemeManager.Init() → double init
+                  karena Loader juga memanggil ThemeManager.Init() setelahnya
+      SEKARANG:   SaveManager hanya baca + tulis data
+                  Loader yang memutuskan kapan ThemeManager.Init() dipanggil
+    - GetValue() tersedia agar Loader bisa baca themeName & accentHex sendiri
+    - TableRemove ditambahkan untuk dipakai komponen lain (Notifications dll)
+    - SafeCall ditambahkan untuk dipakai Functions
 ]]
 
 local SaveManager = {}
@@ -17,14 +20,14 @@ local Config = require(script.Parent.Parent.UI.Config)
 -- STATE
 -- ============================================================
 
-SaveManager._folder     = Config.Save.FolderName or "BorcaUIHub"
-SaveManager._configName = Config.Save.DefaultConfig or "default.json"
+SaveManager._folder     = Config.Save.FolderName    or "BorcaUIHub"
+SaveManager._configName = Config.Save.DefaultConfig  or "default.json"
 SaveManager._data       = {}
 SaveManager._components = {}
 SaveManager._loaded     = false
 
 -- ============================================================
--- FILE SYSTEM HELPERS
+-- FILE SYSTEM HELPERS (internal)
 -- ============================================================
 
 local function FileExists(path)
@@ -51,12 +54,18 @@ local function EncodeJSON(tbl)
     local function encode(val, depth)
         depth = depth or 0
         local t = type(val)
-        if t == "nil" then return "null"
-        elseif t == "boolean" then return val and "true" or "false"
-        elseif t == "number"  then return tostring(val)
-        elseif t == "string"  then
-            val = val:gsub('\\','\\\\'):gsub('"','\\"')
-                     :gsub('\n','\\n'):gsub('\r','\\r'):gsub('\t','\\t')
+        if t == "nil" then
+            return "null"
+        elseif t == "boolean" then
+            return val and "true" or "false"
+        elseif t == "number" then
+            return tostring(val)
+        elseif t == "string" then
+            val = val:gsub('\\','\\\\')
+                     :gsub('"','\\"')
+                     :gsub('\n','\\n')
+                     :gsub('\r','\\r')
+                     :gsub('\t','\\t')
             return '"' .. val .. '"'
         elseif t == "table" then
             local isArray = true
@@ -68,11 +77,13 @@ local function EncodeJSON(tbl)
             isArray = isArray and maxN == #val
             local parts = {}
             if isArray then
-                for _, v in ipairs(val) do table.insert(parts, encode(v, depth+1)) end
+                for _, v in ipairs(val) do
+                    table.insert(parts, encode(v, depth + 1))
+                end
                 return "[" .. table.concat(parts, ",") .. "]"
             else
                 for k, v in pairs(val) do
-                    table.insert(parts, '"' .. tostring(k) .. '":' .. encode(v, depth+1))
+                    table.insert(parts, '"' .. tostring(k) .. '":' .. encode(v, depth + 1))
                 end
                 return "{" .. table.concat(parts, ",") .. "}"
             end
@@ -95,16 +106,30 @@ end
 
 -- ============================================================
 -- INIT
--- FIX: TIDAK memanggil ThemeManager.Init() di sini
---      Loader yang bertanggung jawab memanggil ThemeManager.Init()
---      menggunakan data yang dibaca via SaveManager.GetValue()
+--
+-- FIX (Fix 7): TIDAK lagi memanggil ThemeManager.Init() di sini
+--
+-- SEBELUMNYA (menyebabkan double init):
+--   function SaveManager.Init(options)
+--       ...
+--       -- Ini yang bermasalah:
+--       local themeData = SaveManager._data._theme
+--       if themeData then
+--           ThemeManager.Init(themeData.theme, themeData.accent)
+--       end
+--   end
+--
+-- SEKARANG (benar):
+--   SaveManager.Init() hanya inisialisasi folder, load data, dan auto-save
+--   Loader membaca data tema via SaveManager.GetValue() lalu memanggil
+--   ThemeManager.Init() sendiri di waktu yang tepat
 -- ============================================================
 
 function SaveManager.Init(options)
     options = options or {}
 
-    if options.Folder     then SaveManager._folder     = options.Folder end
-    if options.ConfigName then SaveManager._configName = options.ConfigName end
+    if options.Folder     then SaveManager._folder     = options.Folder     end
+    if options.ConfigName then SaveManager._configName = options.ConfigName  end
 
     MakeFolder(SaveManager._folder)
     SaveManager.Load()
@@ -114,11 +139,12 @@ function SaveManager.Init(options)
     if autoSave == nil then autoSave = Config.Save.AutoSave end
     if autoSave then SaveManager._StartAutoSave() end
 
-    -- FIX: DIHAPUS — SaveManager tidak lagi memanggil ThemeManager.Init()
-    -- Sebelumnya:
-    --   local themeData = SaveManager._data._theme
-    --   if themeData then ThemeManager.Init(themeData.theme, themeData.accent) end
-    -- Sekarang: Loader membaca via SaveManager.GetValue("_theme") sendiri
+    -- FIX: ThemeManager.Init() DIHAPUS dari sini
+    -- Loader yang memanggil ThemeManager.Init() menggunakan:
+    --   ThemeManager.Init(
+    --       SaveManager.GetValue("themeName", "Dark"),
+    --       SaveManager.GetValue("accentHex", nil)
+    --   )
 
     SaveManager._loaded = true
 end
@@ -191,7 +217,7 @@ function SaveManager.Save(configName)
 
     -- Simpan state tema via ThemeManager jika tersedia
     local ok, ThemeManager = pcall(require, script.Parent.ThemeManager)
-    if ok then
+    if ok and ThemeManager then
         SaveManager._data._theme = ThemeManager.Serialize()
     end
 
@@ -269,12 +295,21 @@ end
 
 -- ============================================================
 -- RAW DATA ACCESS
+-- Loader memakai GetValue() untuk baca themeName & accentHex
+-- lalu memanggil ThemeManager.Init() sendiri (Fix 7)
 -- ============================================================
 
 function SaveManager.SetValue(key, value)
     SaveManager._data[key] = value
 end
 
+--[[
+    SaveManager.GetValue(key, default) → any
+    Dipakai oleh Loader untuk membaca data tersimpan seperti:
+        SaveManager.GetValue("themeName", "Dark")
+        SaveManager.GetValue("accentHex", nil)
+        SaveManager.GetValue("settings", {})
+]]
 function SaveManager.GetValue(key, default)
     local val = SaveManager._data[key]
     if val == nil then return default end
@@ -307,6 +342,25 @@ end
 
 function SaveManager.GetPath()
     return SaveManager._folder .. "/" .. SaveManager._configName
+end
+
+-- ============================================================
+-- HELPERS (dipakai oleh modul lain seperti Notifications, dll)
+-- ============================================================
+
+function SaveManager.TableRemove(tbl, value)
+    for i, v in ipairs(tbl) do
+        if v == value then
+            table.remove(tbl, i)
+            return true
+        end
+    end
+    return false
+end
+
+function SaveManager.SafeCall(fn, ...)
+    if type(fn) ~= "function" then return false, nil end
+    return pcall(fn, ...)
 end
 
 return SaveManager

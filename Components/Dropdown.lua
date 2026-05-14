@@ -2,6 +2,14 @@
     BorcaUIHub — Components/Dropdowns.lua
     Komponen dropdown untuk banyak pilihan dalam satu tempat.
     Mendukung animasi buka/tutup, search, dan multi-select opsional.
+
+    FIX (Fix 9b):
+    - Saat single-select, setelah user memilih opsi, dropdown menutup
+      SEBELUMNYA: task.delay(0.1, function() Dropdowns._Close(dropFrame, chevron, isOpen, cb) end)
+                  → isOpen adalah snapshot nilai lama yang bisa sudah berubah sebelum delay selesai
+      SEKARANG:   task.delay(0.1, function() Close() end)
+                  → Close() adalah fungsi lokal yang membaca isOpen saat ini (live state),
+                    bukan snapshot, dan sudah mengelola semua state dengan benar
 ]]
 
 local Dropdowns = {}
@@ -249,6 +257,12 @@ function Dropdowns.Create(parent, options)
         end
     end
 
+    -- ── TOGGLE OPEN / CLOSE ────────────────────────────────
+    -- Dideklarasikan sebagai local di atas BuildOptions agar bisa
+    -- dipanggil dari dalam opsi klik (FIX 9b)
+    local Open
+    local Close
+
     local function BuildOptions(itemList)
         -- Bersihkan dulu
         for _, obj in ipairs(optionButtons) do
@@ -342,12 +356,17 @@ function Dropdowns.Create(parent, options)
                 else
                     selectedValues = { item }
                     RefreshOptionColors()
-                    -- Tutup dropdown setelah pilih
+                    -- FIX (Fix 9b): Panggil Close() lokal, bukan Dropdowns._Close(...)
+                    -- SEBELUMNYA: task.delay(0.1, function()
+                    --                 Dropdowns._Close(dropFrame, chevron, isOpen, function()
+                    --                     isOpen = false
+                    --                     wrapper.Size = UDim2.new(1, 0, 0, headerH)
+                    --                 end)
+                    --             end)
+                    --             → isOpen adalah snapshot yang bisa sudah basi setelah delay
+                    -- SEKARANG:   Close() membaca isOpen live dan mengelola semua state sendiri
                     task.delay(0.1, function()
-                        Dropdowns._Close(dropFrame, chevron, isOpen, function()
-                            isOpen = false
-                            wrapper.Size = UDim2.new(1, 0, 0, headerH)
-                        end)
+                        Close()
                     end)
                 end
 
@@ -370,8 +389,11 @@ function Dropdowns.Create(parent, options)
 
     BuildOptions(items)
 
-    -- ── TOGGLE OPEN / CLOSE ────────────────────────────────
-    local function Open()
+    -- ── DEFINISI OPEN / CLOSE ──────────────────────────────
+    -- Didefinisikan setelah BuildOptions agar BuildOptions bisa
+    -- dipakai di Open (rebuild jika items berubah)
+
+    Open = function()
         if disabled then return end
         -- Tutup dropdown lain yang terbuka
         if _openDropdown and _openDropdown ~= dropFrame then
@@ -393,7 +415,8 @@ function Dropdowns.Create(parent, options)
         }):Play()
     end
 
-    local function Close()
+    Close = function()
+        if not isOpen then return end
         isOpen = false
         _openDropdown = nil
         Animations.DropdownClose(dropFrame, function()
@@ -464,8 +487,9 @@ function Dropdowns.Create(parent, options)
 end
 
 -- Helper internal untuk tutup dari luar
-function Dropdowns._Close(dropFrame, chevron, isOpen, cb)
-    if not isOpen then return end
+-- Dipertahankan untuk kompatibilitas tapi tidak lagi dipakai dari dalam opsi
+function Dropdowns._Close(dropFrame, chevron, isOpenRef, cb)
+    if not isOpenRef then return end
     Animations.DropdownClose(dropFrame, cb)
     local ts = game:GetService("TweenService")
     ts:Create(chevron, TweenInfo.new(0.15), { Rotation = 0 }):Play()

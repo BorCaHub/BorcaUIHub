@@ -3,6 +3,18 @@
     Menangani semua input dari pengguna secara terpusat.
     Mencakup keyboard shortcut, mouse, dan keybind kustom.
     Memastikan input ditangani dengan konsisten di seluruh UI.
+
+    FIX (Fix 10):
+    - _holdTimer di-cancel dulu sebelum membuat yang baru
+      SEBELUMNYA: kalau _HandleKeyDown dipanggil dua kali cepat untuk key yang sama
+                  (misalnya saat auto-repeat), timer lama tidak di-cancel → dua loop berjalan
+      SEKARANG:   selalu cancel + nil dulu sebelum task.delay baru
+    - Setelah loop while selesai secara alami (key dilepas sebelum timeout),
+      _holdTimer di-set nil agar tidak ada referensi stale yang bisa di-cancel salah
+      SEBELUMNYA: _holdTimer masih menyimpan thread yang sudah selesai
+                  task.cancel() pada thread selesai di Roblox tidak error, tapi
+                  menyimpan referensi stale bisa membingungkan debugging
+      SEKARANG:   kb._holdTimer = nil di akhir loop
 ]]
 
 local InputManager = {}
@@ -99,7 +111,9 @@ end
 function InputManager.Unregister(id)
     local kb = InputManager._keybinds[id]
     if kb and kb._holdTimer then
-        task.cancel(kb._holdTimer)
+        -- FIX: cek apakah timer masih ada sebelum cancel
+        pcall(function() task.cancel(kb._holdTimer) end)
+        kb._holdTimer = nil
     end
     InputManager._keybinds[id] = nil
 end
@@ -189,11 +203,27 @@ function InputManager._HandleKeyDown(keyCode)
 
                 -- Hold timer
                 if kb.onHeld then
+                    -- FIX (Fix 10): Cancel timer lama DULU sebelum buat yang baru
+                    -- SEBELUMNYA: tidak ada cancel → kalau key down dipanggil dua kali
+                    --             (misalnya auto-repeat), dua loop bisa berjalan bersamaan
+                    -- SEKARANG:   selalu bersihkan timer sebelumnya lebih dulu
+                    if kb._holdTimer then
+                        pcall(function() task.cancel(kb._holdTimer) end)
+                        kb._holdTimer = nil
+                    end
+
                     kb._holdTimer = task.delay(kb.holdDelay, function()
+                        -- Loop selama key masih ditekan
                         while UserInputService:IsKeyDown(keyCode) do
                             pcall(kb.onHeld)
                             task.wait(0.1)
                         end
+                        -- FIX (Fix 10): Clear _holdTimer setelah loop selesai secara alami
+                        -- SEBELUMNYA: _holdTimer masih menyimpan referensi thread yang sudah selesai
+                        --             → menyebabkan task.cancel() di _HandleKeyUp dipanggil pada
+                        --               thread yang sudah mati (tidak error di Roblox, tapi stale)
+                        -- SEKARANG:   nil-kan sendiri setelah loop selesai
+                        kb._holdTimer = nil
                     end)
                 end
             end
@@ -204,7 +234,9 @@ end
 function InputManager._HandleKeyUp(keyCode)
     for _, kb in pairs(InputManager._keybinds) do
         if kb.keyCode == keyCode and kb._holdTimer then
-            task.cancel(kb._holdTimer)
+            -- FIX (Fix 10): Gunakan pcall untuk cancel agar tidak error
+            -- jika timer sudah selesai sendiri di antara cek dan cancel
+            pcall(function() task.cancel(kb._holdTimer) end)
             kb._holdTimer = nil
         end
     end
@@ -220,7 +252,6 @@ function InputManager._RegisterDefaults()
         KeyCode     = Config.Keybind.ToggleUI or Enum.KeyCode.RightControl,
         Description = "Toggle UI",
         Callback    = function()
-            -- Main.Toggle() dipanggil oleh caller yang mengatur referensi
             if InputManager._onToggleUI then
                 InputManager._onToggleUI()
             end

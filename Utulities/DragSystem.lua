@@ -3,6 +3,17 @@
     Memungkinkan window digeser dengan mouse.
     Memberikan kebebasan kepada user menempatkan window di posisi yang nyaman.
     Mendukung batas layar agar window tidak keluar dari viewport.
+
+    FIX (Fix 11):
+    - Konversi posisi scale → offset tidak lagi pakai task.defer
+      SEBELUMNYA: task.defer(function() ... window.AbsolutePosition ... end)
+                  → task.defer hanya menunggu SATU frame; kalau UI baru dibuat
+                    di frame yang sama, AbsolutePosition masih 0,0
+                  → window meloncat ke pojok kiri atas (0,0) saat pertama di-drag
+      SEKARANG:   task.spawn dengan loop tunggu AbsoluteSize > 0
+                  (AbsoluteSize valid = frame sudah di-render = AbsolutePosition valid)
+                  Konversi juga hanya dilakukan jika posisi masih scale-based,
+                  tidak menimpa posisi yang sudah offset
 ]]
 
 local DragSystem = {}
@@ -158,18 +169,52 @@ function DragSystem.Attach(window, handle, options)
     table.insert(connections, conn5)
 
     -- ── Inisialisasi posisi (agar anchor = 0,0) ─────────────
-    -- Konversi posisi scale+offset ke offset murni
-    task.defer(function()
+    -- FIX (Fix 11): Tidak lagi pakai task.defer yang hanya menunggu 1 frame
+    --
+    -- SEBELUMNYA:
+    --   task.defer(function()
+    --       local absX = window.AbsolutePosition.X   -- bisa 0,0 kalau belum render!
+    --       local absY = window.AbsolutePosition.Y
+    --       window.AnchorPoint = Vector2.new(0, 0)
+    --       window.Position    = UDim2.fromOffset(absX, absY)
+    --   end)
+    --   → Frame baru dibuat di frame yang sama → AbsolutePosition = 0,0
+    --   → window.Position = UDim2.fromOffset(0, 0) → window loncat ke pojok kiri atas
+    --
+    -- SEKARANG:
+    --   task.spawn dengan loop tunggu AbsoluteSize.X > 0
+    --   AbsoluteSize valid = frame sudah di-layout oleh engine = AbsolutePosition juga valid
+    --   Konversi hanya dilakukan jika posisi masih scale-based (ada Scale != 0)
+    task.spawn(function()
+        -- Tunggu sampai frame benar-benar selesai di-render oleh engine
+        -- AbsoluteSize == 0 berarti frame belum di-layout
+        local waited = 0
+        while window and window.Parent and window.AbsoluteSize.X == 0 do
+            task.wait()
+            waited += 1
+            -- Batas keamanan: tidak menunggu lebih dari ~3 detik (180 frame @ 60fps)
+            if waited > 180 then
+                break
+            end
+        end
+
+        -- Cek ulang apakah frame masih ada setelah menunggu
         if not window or not window.Parent then return end
-        local vp = workspace.CurrentCamera
-            and workspace.CurrentCamera.ViewportSize
-            or Vector2.new(1920, 1080)
 
-        local absX = window.AbsolutePosition.X
-        local absY = window.AbsolutePosition.Y
+        -- Hanya konversi jika posisi masih scale-based
+        -- (Scale != 0 artinya posisi pakai persentase layar, perlu dikonversi ke pixel)
+        -- Kalau sudah offset (Scale == 0), tidak perlu diapa-apakan
+        local pos = window.Position
+        if pos.X.Scale ~= 0 or pos.Y.Scale ~= 0 then
+            local absX = window.AbsolutePosition.X
+            local absY = window.AbsolutePosition.Y
 
-        window.AnchorPoint = Vector2.new(0, 0)
-        window.Position    = UDim2.fromOffset(absX, absY)
+            -- Validasi: AbsolutePosition harus masuk akal (> 0 atau setidaknya bukan NaN)
+            if absX == absX and absY == absY then  -- NaN check: NaN ~= NaN
+                window.AnchorPoint = Vector2.new(0, 0)
+                window.Position    = UDim2.fromOffset(absX, absY)
+            end
+        end
     end)
 
     -- ── Return drag object ──────────────────────────────────
@@ -219,6 +264,11 @@ function DragSystem.Attach(window, handle, options)
     end
 
     function dragObj.Destroy()
+        -- Hentikan drag dulu jika sedang berjalan
+        if isDragging then
+            isDragging = false
+            SetGrabCursor(false)
+        end
         for _, conn in ipairs(connections) do
             pcall(function() conn:Disconnect() end)
         end

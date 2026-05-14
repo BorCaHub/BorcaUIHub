@@ -2,6 +2,14 @@
     BorcaUIHub — Components/ColorPickers.lua
     Komponen pemilih warna dengan palette preset dan input hex.
     Terhubung ke ThemeManager untuk perubahan accent real-time.
+
+    FIX (Fix 9a):
+    - SetColor dideklarasikan sebagai local di atas semua UI builder
+      SEBELUMNYA: function SetColor(...) → global scope, bisa konflik
+                  + forward reference crash karena swatch callback
+                  memanggil SetColor sebelum didefinisikan
+      SEKARANG:   local SetColor dideklarasikan dulu (forward),
+                  lalu diisi body-nya setelah semua UI selesai dibuat
 ]]
 
 local ColorPickers = {}
@@ -155,13 +163,12 @@ function ColorPickers.Create(parent, options)
         TextXAlignment = Enum.TextXAlignment.Center,
         ZIndex    = 5,
     })
-    -- Shadow teks
     hexPreviewLbl.TextStrokeTransparency = 0.4
     hexPreviewLbl.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
 
     -- ── PICKER PANEL ───────────────────────────────────────
     local panelH = 0
-    if showPalette then panelH = panelH + 86 end   -- 3 baris × ~26 + padding
+    if showPalette then panelH = panelH + 86 end
     if showHex     then panelH = panelH + 44 end
 
     local pickerPanel = Functions.CreateFrame({
@@ -187,6 +194,16 @@ function ColorPickers.Create(parent, options)
         FillDirection = Enum.FillDirection.Vertical,
         Padding       = UDim.new(0, 8),
     })
+
+    -- ============================================================
+    -- FIX (Fix 9a): SetColor dideklarasikan sebagai local di sini
+    -- SEBELUMNYA: function SetColor(...) → global, bisa bocor + forward ref crash
+    -- SEKARANG:   local SetColor dideklarasikan lebih dulu sebagai nil,
+    --             lalu diisi setelah semua UI selesai dibuat.
+    --             Dengan begitu swatch callback bisa mereferensikannya
+    --             tanpa forward reference crash.
+    -- ============================================================
+    local SetColor
 
     -- ── PALETTE GRID ───────────────────────────────────────
     local paletteSwatchRefs = {}
@@ -240,6 +257,10 @@ function ColorPickers.Create(parent, options)
                 }):Play()
             end)
 
+            -- FIX: SetColor dipanggil di sini, tapi karena local SetColor
+            -- sudah dideklarasikan di atas (walau belum diisi), Lua
+            -- akan mencari nilai saat callback ini dieksekusi (bukan saat
+            -- fungsi ini didefinisikan), sehingga tidak crash.
             swatch.MouseButton1Click:Connect(function()
                 if disabled then return end
                 SetColor(color)
@@ -264,6 +285,8 @@ function ColorPickers.Create(parent, options)
     end
 
     -- ── HEX INPUT ──────────────────────────────────────────
+    local hexBox = nil
+
     if showHex then
         local hexRow = Functions.CreateFrame({
             Name                   = "HexRow",
@@ -293,7 +316,7 @@ function ColorPickers.Create(parent, options)
             LayoutOrder = 0,
         })
 
-        local hexBox = Functions.CreateTextBox({
+        hexBox = Functions.CreateTextBox({
             Name            = "HexInput",
             Parent          = hexRow,
             Size            = UDim2.new(1, -70, 1, 0),
@@ -343,8 +366,14 @@ function ColorPickers.Create(parent, options)
         end)
     end
 
-    -- ── SET COLOR FUNCTION ─────────────────────────────────
-    function SetColor(color, silent)
+    -- ============================================================
+    -- FIX (Fix 9a): SetColor diisi SETELAH semua UI dibuat
+    -- SEBELUMNYA: function SetColor(...) global di tengah-tengah kode
+    -- SEKARANG:   SetColor = function(...) local, diisi di sini
+    --             Semua callback di atas yang memanggil SetColor akan
+    --             mendapat referensi yang sudah terisi saat dieksekusi
+    -- ============================================================
+    SetColor = function(color, silent)
         currentColor = color
         previewBtn.BackgroundColor3 = color
         hexPreviewLbl.Text = Functions.ColorToHex(color)
@@ -353,6 +382,13 @@ function ColorPickers.Create(parent, options)
         hexPreviewLbl.TextColor3 = brightness > 0.6
             and Color3.fromRGB(30, 30, 30)
             or  Color3.fromRGB(255, 255, 255)
+
+        -- Update hex input jika ada
+        if hexBox and hexBox.Parent then
+            pcall(function()
+                hexBox.Text = Functions.ColorToHex(color):sub(2)
+            end)
+        end
 
         if not silent and callback then
             pcall(callback, color)

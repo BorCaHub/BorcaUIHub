@@ -1,9 +1,11 @@
 --[[
     BorcaUIHub — Managers/ThemeManager.lua
 
-    FIX:
-    - Tambah _initialized flag: Init() hanya jalan sekali
-    - Cegah double-init dari SaveManager.Init lalu Loader.Init (dua kali)
+    FIX (Fix 7):
+    - Tambah flag _initialized: Init() hanya jalan sekali
+    - Cegah double-init dari SaveManager.Init() lalu Loader.Init() (dua kali)
+      SEBELUMNYA: Init() bisa dipanggil 2x → listener fire 2x, UI state kacau
+      SEKARANG:   Panggilan kedua hanya apply tema/accent tanpa reset listener
     - Listeners tidak lagi fire dua kali untuk set tema/accent yang sama
 ]]
 
@@ -21,21 +23,26 @@ ThemeManager._currentAccent = nil
 ThemeManager._listeners     = {}
 ThemeManager._listenerCount = 0
 
--- FIX: flag untuk cegah double init
-ThemeManager._initialized   = false
+-- FIX (Fix 7): flag untuk cegah double init
+-- SEBELUMNYA: tidak ada guard → Init() bisa jalan berkali-kali
+-- SEKARANG:   _initialized = true setelah pertama kali init
+ThemeManager._initialized = false
 
 -- ============================================================
 -- INIT
--- FIX: hanya jalankan sekali; panggilan kedua diabaikan
+--
+-- FIX (Fix 7): Hanya jalankan penuh sekali
+-- Panggilan kedua (dari Loader setelah SaveManager) hanya apply
+-- tema/accent yang diberikan tanpa reset listener yang sudah ada
 -- ============================================================
 
 function ThemeManager.Init(savedTheme, savedAccent)
-    -- FIX: guard double init
+
     if ThemeManager._initialized then
-        -- Kalau dipanggil lagi (dari Loader setelah SaveManager), cukup apply
-        -- tema/accent yang diberikan tanpa reset listener
+        -- FIX: sudah pernah init — hanya apply ulang tanpa reset
+        -- Ini mencegah listener dihapus lalu semua OnChanged jadi tidak bekerja
         if savedTheme and Theme.Presets[savedTheme] then
-            ThemeManager.Apply(savedTheme, true)
+            ThemeManager.Apply(savedTheme, true)  -- silent = tidak fire listener
         end
         if savedAccent then
             local ok, color = pcall(function()
@@ -46,11 +53,12 @@ function ThemeManager.Init(savedTheme, savedAccent)
                     tonumber(hex:sub(5,6), 16) / 255
                 )
             end)
-            if ok then ThemeManager.SetAccent(color, true) end
+            if ok then ThemeManager.SetAccent(color, true) end  -- silent
         end
         return
     end
 
+    -- Pertama kali init — set flag lalu lanjutkan
     ThemeManager._initialized = true
 
     if savedTheme and Theme.Presets[savedTheme] then
@@ -83,6 +91,7 @@ function ThemeManager.Apply(themeName, silent)
     ThemeManager._currentTheme = themeName
     Theme.Set(themeName)
 
+    -- Re-apply accent jika sudah ada custom accent
     if ThemeManager._currentAccent then
         Theme.SetAccent(ThemeManager._currentAccent)
     end
@@ -208,10 +217,11 @@ end
 
 -- ============================================================
 -- RESET (untuk testing / logout)
+-- FIX: Reset juga mengosongkan _initialized agar bisa init ulang
 -- ============================================================
 
 function ThemeManager.Reset()
-    ThemeManager._initialized   = false
+    ThemeManager._initialized   = false   -- FIX: izinkan init ulang setelah reset
     ThemeManager._currentTheme  = "Dark"
     ThemeManager._currentAccent = nil
     ThemeManager._listeners     = {}

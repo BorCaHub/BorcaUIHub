@@ -1,10 +1,11 @@
 --[[
     BorcaUIHub — LoaderUI/Loader.lua
     Loader utama BorcaUIHub.
-    Bertugas menginisialisasi seluruh sistem UI secara terpusat:
-    tema, save, input, komponen, overlay, navigasi, dan utilities.
-    Dipanggil oleh BorcaScriptHub (FreeLoader/PremiumLoader) sebelum
-    konten tab diisi oleh FreeScript/PremiumScript.
+
+    CHANGELOG (update untuk BorcaScriptHub integration):
+    - Tambah Loader.ShowModal()   → dipanggil PremiumLoader sebelum window ada
+    - Tambah Loader.ShowLoading() → sudah ada, dipastikan di return table
+    - Semua fungsi ini diekspos via return Loader di bagian bawah
 
     Urutan inisialisasi:
     1. SaveManager  → muat config tersimpan
@@ -81,7 +82,7 @@ local FeedbackSender = require(script.Parent.Parent.Feedback.FeedbackSender)
 local Loader = {}
 
 -- ============================================================
--- INIT DEPS (overlay & sistem yang butuh deps inject)
+-- INTERNAL: INIT DEPS
 -- ============================================================
 
 local function _InitDeps()
@@ -98,16 +99,97 @@ local function _InitDeps()
     SearchBar.Init(deps)
     SearchSystem.Init(deps)
 
-    -- Cards dan Separators memakai pola Init berbeda (deps table)
     Cards.Init(deps)
     Separators.Init(deps)
 
-    -- FeedbackManager terhubung ke FeedbackSender
     FeedbackManager.Init(FeedbackSender)
 end
 
 -- ============================================================
+-- INTERNAL: INIT DEPS MINIMAL
+-- Versi ringan untuk ShowModal / ShowLoading sebelum window dibuat.
+-- Hanya init modul yang diperlukan, tidak semua.
+-- ============================================================
+
+local _depsInitialized = false
+
+local function _InitDepsMinimal()
+    if _depsInitialized then return end
+    _depsInitialized = true
+
+    local deps = {
+        Functions = Functions,
+        Theme     = Theme,
+        Config    = Config,
+    }
+
+    Loading.Init(deps)
+    Modals.Init(deps)
+    Notifications.Init(deps)
+end
+
+-- ============================================================
+-- PUBLIC: ShowLoading
+-- Tampilkan loading screen sebelum Loader.Init dipanggil.
+-- Bisa dipakai oleh FreeLoader / PremiumLoader di BorcaScriptHub.
+-- ============================================================
+
+--[[
+    Loader.ShowLoading(options) → loadingScreen
+    Tampilkan loading screen overlay.
+
+    @param options {
+        Title:       string
+        Subtitle:    string
+        LogoText:    string
+        LogoColor:   Color3
+        Steps:       {string}
+        StepDelay:   number
+        AutoFinish:  boolean
+        OnFinish:    function
+    }
+    @return loadingScreen {
+        SetProgress: function(0-1)
+        SetStatus:   function(string)
+        Finish:      function()
+    }
+]]
+function Loader.ShowLoading(options)
+    _InitDepsMinimal()
+    return Loading.Show(options)
+end
+
+-- ============================================================
+-- PUBLIC: ShowModal
+-- Tampilkan modal input key SEBELUM window utama dibuat.
+-- Dipakai oleh PremiumLoader untuk verifikasi key premium.
+-- Tidak membutuhkan UIContext — langsung buat ScreenGui sendiri.
+-- ============================================================
+
+--[[
+    Loader.ShowModal(options)
+    Tampilkan dialog input teks (untuk key premium, dll).
+
+    @param options {
+        Title:       string
+        Body:        string
+        Placeholder: string
+        Icon:        string
+        IconColor:   Color3
+        ConfirmText: string
+        CancelText:  string
+        OnConfirm:   function(inputText: string)
+        OnCancel:    function()
+    }
+]]
+function Loader.ShowModal(options)
+    _InitDepsMinimal()
+    Modals.Input(options)
+end
+
+-- ============================================================
 -- PUBLIC: Init
+-- Inisialisasi penuh BorcaUIHub, kembalikan UIContext.
 -- ============================================================
 
 --[[
@@ -115,52 +197,30 @@ end
     Inisialisasi penuh BorcaUIHub.
 
     @param options {
-        -- Identitas hub
-        HubName:    string    -- contoh "BorcaScriptHub"
-        HubVersion: string    -- contoh "v1.0.0"
-        HubIcon:    string    -- karakter ikon header
-        SubTitle:   string    -- teks kecil di header
-
-        -- User
-        Premium:    boolean   -- apakah session premium
-        Username:   string    -- nama player (opsional, auto-detect)
-
-        -- Config
-        ConfigName: string    -- nama file config (opsional)
-        FolderName: string    -- nama folder save (opsional)
-
-        -- Tab default pertama dibuka
-        DefaultTab: string    -- ID tab (default "home")
-
-        -- Callback
-        OnReady:    function(UIContext)  -- dipanggil setelah selesai
+        HubName:    string
+        HubVersion: string
+        HubIcon:    string
+        SubTitle:   string
+        Premium:    boolean
+        Username:   string
+        ConfigName: string
+        FolderName: string
+        DefaultTab: string
+        OnReady:    function(UIContext)
         OnClose:    function()
         OnToggle:   function(visible: boolean)
     }
 
     @return UIContext {
-        -- Referensi window
         Window, Header, Sidebar, ContentPanel, ScrollContent, ScreenGui,
-
-        -- Controller
         WindowCtrl, DragCtrl,
-
-        -- Sistem
         TabManager, SectionManager, Sections, SaveManager,
         ThemeManager, SettingsManager, InputManager, Notifications,
         Modals, Tooltips, BlurSystem, SearchSystem,
-
-        -- Komponen
         Toggles, Switches, Sliders, Buttons, Dropdowns,
         Inputs, Labels, Paragraphs, ColorPickers, KeyBinds,
         Cards, Separators,
-
-        -- Fungsi bantu
-        AddTab: function(tabId, options, builder)
-        GetTabFrame: function(tabId) → Frame
-        SwitchTab: function(tabId)
-        Notify: function(options)
-        Cleanup: function()
+        AddTab, GetTabFrame, InitTab, SwitchTab, Notify, Cleanup
     }
 ]]
 function Loader.Init(options)
@@ -172,15 +232,20 @@ function Loader.Init(options)
     local subTitle   = options.SubTitle   or hubName
     local isPremium  = options.Premium    or false
     local username   = options.Username
-        or (pcall(function() return game:GetService("Players").LocalPlayer.Name end)
-            and game:GetService("Players").LocalPlayer.Name
-            or "Player")
     local configName = options.ConfigName or (isPremium and "premium_config.json" or "free_config.json")
     local folderName = options.FolderName or "BorcaUIHub"
     local defaultTab = options.DefaultTab or "home"
     local onReady    = options.OnReady
     local onClose    = options.OnClose
     local onToggle   = options.OnToggle
+
+    -- Auto-detect username jika tidak diberikan
+    if not username then
+        local ok, name = pcall(function()
+            return game:GetService("Players").LocalPlayer.Name
+        end)
+        username = ok and name or "Player"
+    end
 
     -- ── 1. SaveManager ──────────────────────────────────────
     SaveManager.Init({
@@ -190,7 +255,6 @@ function Loader.Init(options)
     })
 
     -- ── 2. ThemeManager ─────────────────────────────────────
-    -- Hanya loader yang memanggil ThemeManager.Init (Fix 7)
     ThemeManager.Init(
         SaveManager.GetValue("themeName", isPremium and "Midnight" or "Dark"),
         SaveManager.GetValue("accentHex", nil)
@@ -199,10 +263,14 @@ function Loader.Init(options)
     -- ── 3. SettingsManager ──────────────────────────────────
     SettingsManager.Init(SaveManager.GetValue("settings", {}))
 
-    -- ── 4. Deps (Notifications, Modals, dll) ─────────────────
+    -- ── 4. Deps ─────────────────────────────────────────────
+    -- Reset flag agar _InitDeps berjalan penuh
+    -- (bisa saja _InitDepsMinimal sudah dipanggil sebelumnya)
+    _depsInitialized = false
     _InitDeps()
+    _depsInitialized = true
 
-    -- ── 5. Animasi controller global ─────────────────────────
+    -- ── 5. Animation controller ──────────────────────────────
     AnimationController.SetSpeed(SettingsManager.Get("AnimationSpeed") or 1.0)
     if not SettingsManager.Get("AnimationsEnabled") then
         AnimationController.Pause()
@@ -216,7 +284,6 @@ function Loader.Init(options)
         Size     = Responsive.GetWindowSize(),
     })
 
-    -- Responsive bind
     Responsive.Init(window.ScreenGui)
     Responsive.BindWindowResize(
         window.Window,
@@ -307,7 +374,7 @@ function Loader.Init(options)
     end)
 
     -- ============================================================
-    -- BUAT UIContext — return ke Script Hub
+    -- UIContext — dikembalikan ke BorcaScriptHub
     -- ============================================================
 
     local UIContext = {
@@ -355,12 +422,12 @@ function Loader.Init(options)
         Cards         = Cards,
         Separators    = Separators,
 
-        -- ── Helpers ──────────────────────────────────────────
+        -- ── Helper functions ─────────────────────────────────
 
         --[[
             UIContext.AddTab(tabId, options, builder)
-            Tambah tab dinamis dan opsional isi kontennya.
-            builder: function(frame) dipanggil saat tab pertama dibuka (lazy).
+            Tambah tab dinamis.
+            builder: function(frame) → dipanggil saat tab pertama dibuka.
         ]]
         AddTab = function(tabId, tabOptions, builder)
             Tabs.AddTab(tabId, tabOptions, builder)
@@ -368,7 +435,7 @@ function Loader.Init(options)
 
         --[[
             UIContext.GetTabFrame(tabId) → Frame
-            Ambil frame konten tab untuk diisi manual.
+            Ambil frame konten tab.
         ]]
         GetTabFrame = function(tabId)
             return Tabs.GetFrame(tabId)
@@ -376,7 +443,7 @@ function Loader.Init(options)
 
         --[[
             UIContext.InitTab(tabId)
-            Daftarkan tab ke SectionManager.
+            Daftarkan tab ke SectionManager dan tandai sebagai built.
         ]]
         InitTab = function(tabId)
             local frame = Tabs.GetFrame(tabId)
@@ -396,7 +463,7 @@ function Loader.Init(options)
 
         --[[
             UIContext.Notify(options)
-            Shortcut kirim notifikasi.
+            Kirim notifikasi.
         ]]
         Notify = function(notifOptions)
             Notifications.Send(notifOptions)
@@ -404,14 +471,14 @@ function Loader.Init(options)
 
         --[[
             UIContext.Cleanup()
-            Bersihkan semua resource dan tutup window.
+            Tutup window dan bersihkan semua resource.
         ]]
         Cleanup = function()
             winCtrl.Close()
         end,
     }
 
-    -- ── Callback OnReady ─────────────────────────────────────
+    -- ── OnReady callback ─────────────────────────────────────
     if onReady then
         task.spawn(function()
             pcall(onReady, UIContext)
@@ -422,17 +489,11 @@ function Loader.Init(options)
 end
 
 -- ============================================================
--- PUBLIC: ShowLoading
--- Shortcut untuk menampilkan loading screen sebelum Loader.Init
+-- RETURN LOADER
+-- Semua fungsi publik yang bisa dipanggil dari BorcaScriptHub:
+--   BorcaLoader.ShowLoading(options) → loadingScreen
+--   BorcaLoader.ShowModal(options)
+--   BorcaLoader.Init(options)       → UIContext
 -- ============================================================
-
---[[
-    Loader.ShowLoading(options) → loadingScreen
-    Tampilkan loading screen. Sama seperti Loading.Show tapi
-    tersedia dari satu titik masuk.
-]]
-function Loader.ShowLoading(options)
-    return Loading.Show(options)
-end
 
 return Loader

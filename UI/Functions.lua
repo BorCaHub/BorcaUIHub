@@ -2,6 +2,28 @@
     BorcaUIHub — UI/Functions.lua
     Kumpulan helper yang dipakai ulang di seluruh komponen.
     Tujuan: menghindari duplikasi kode dan menjaga konsistensi visual.
+
+    FIX (Bug 1):
+    - Tambah Functions.Create(className, properties, parent)
+      SEBELUMNYA: tidak ada → Loading.lua, Modals.lua, Notifications.lua,
+                  Tooltips.lua, SearchBar.lua, Cards.lua, Separators.lua crash
+                  saat dipanggil karena fungsi ini nil
+      SEKARANG:   ada dan konsisten dengan pola Instance.new Roblox
+    - Tambah Functions.Tween(instance, goals, duration, style, direction)
+      SEBELUMNYA: tidak ada → semua modul overlay tidak bisa membuat animasi
+      SEKARANG:   shortcut TweenService:Create(...):Play() yang aman
+    - Tambah Functions.SafeCall(fn, ...)
+      SEBELUMNYA: tidak ada → Modals.lua, Notifications.lua crash saat callback
+      SEKARANG:   wrapper pcall yang mengembalikan ok, result
+    - Tambah Functions.TableRemove(tbl, value)
+      SEBELUMNYA: tidak ada → Notifications.lua crash saat dismiss notif
+      SEKARANG:   hapus value dari array (bukan index)
+    - Tambah Functions.Trim(str)
+      SEBELUMNYA: tidak ada → FeedbackUI.lua, BugReport.lua, SuggestionReport.lua crash
+      SEKARANG:   strip whitespace di awal dan akhir string
+    - Tambah Functions.ParentGui(gui)
+      SEBELUMNYA: tidak ada → Notifications.lua crash saat ensureGui()
+      SEKARANG:   coba CoreGui dulu, fallback ke PlayerGui
 ]]
 
 local Functions = {}
@@ -16,7 +38,7 @@ local Config = require(script.Parent.Config)
 --[[
     Functions.CreateFrame(options) → Frame
     Buat Frame dengan shortcut property lengkap.
-    
+
     @param options {
         Name, Parent, Size, Position, AnchorPoint,
         BackgroundColor, BackgroundTransparency,
@@ -162,13 +184,50 @@ function Functions.CreateImageLabel(options)
 end
 
 -- ============================================================
+-- GENERIC INSTANCE CREATOR (dibutuhkan oleh overlay & card modules)
+-- FIX (Bug 1): fungsi ini sebelumnya tidak ada, menyebabkan crash pada
+-- Loading.lua, Modals.lua, Notifications.lua, Tooltips.lua,
+-- SearchBar.lua, SearchSystem.lua, Cards.lua, Separators.lua
+-- ============================================================
+
+--[[
+    Functions.Create(className, properties, parent) → Instance
+    Buat instance Roblox apapun dengan properties dari tabel.
+    Dipakai oleh modul overlay (Loading, Modals, Notifications, dll)
+    yang menerima Functions via dependency injection (Init(deps)).
+
+    Contoh penggunaan di Loading.lua:
+        Functions.Create("Frame", {BackgroundColor3 = Theme.Get("SecondaryBG")}, card)
+        Functions.Create("UICorner", {CornerRadius = UDim.new(0,12)}, frame)
+        Functions.Create("TextLabel", {Text = "Loading..."}, card)
+
+    @param className  string    -- nama class Roblox (Frame, TextLabel, dll)
+    @param properties table     -- property → value
+    @param parent     Instance  -- parent instance (opsional)
+    @return Instance
+]]
+function Functions.Create(className, properties, parent)
+    local instance = Instance.new(className)
+    for key, value in pairs(properties or {}) do
+        -- pcall agar property yang tidak dikenal tidak crash seluruh proses
+        pcall(function()
+            instance[key] = value
+        end)
+    end
+    if parent then
+        instance.Parent = parent
+    end
+    return instance
+end
+
+-- ============================================================
 -- STYLE APPLIERS
 -- ============================================================
 
 --[[
     Functions.ApplyCorner(instance, radius)
     Tambahkan UICorner ke instance.
-    
+
     @param instance   GuiObject
     @param radius     UDim | number  (number dikonversi ke UDim.new(0, n))
 ]]
@@ -186,7 +245,7 @@ end
 --[[
     Functions.ApplyStroke(instance, options)
     Tambahkan UIStroke ke instance.
-    
+
     @param options {
         Color: Color3,
         Thickness: number,
@@ -197,19 +256,19 @@ end
 function Functions.ApplyStroke(instance, options)
     options = options or {}
     local stroke = Instance.new("UIStroke")
-    stroke.Color          = options.Color or Theme.Get("Stroke")
-    stroke.Thickness      = options.Thickness or 1
-    stroke.Transparency   = options.Transparency or Config.Transparency.Stroke
-    stroke.LineJoinMode   = options.LineJoinMode or Enum.LineJoinMode.Round
+    stroke.Color           = options.Color or Theme.Get("Stroke")
+    stroke.Thickness       = options.Thickness or 1
+    stroke.Transparency    = options.Transparency or Config.Transparency.Stroke
+    stroke.LineJoinMode    = options.LineJoinMode or Enum.LineJoinMode.Round
     stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-    stroke.Parent         = instance
+    stroke.Parent          = instance
     return stroke
 end
 
 --[[
     Functions.ApplyShadow(instance, options)
     Simulasi drop shadow menggunakan ImageLabel dengan gradient radial.
-    
+
     @param options {
         Color: Color3,
         Opacity: number (0–1),
@@ -219,29 +278,23 @@ end
 ]]
 function Functions.ApplyShadow(instance, options)
     options = options or {}
-    local size    = options.Size   or 16
+    local size    = options.Size    or 16
     local opacity = options.Opacity or 0.35
-    local offset  = options.Offset or Vector2.new(0, 6)
+    local offset  = options.Offset  or Vector2.new(0, 6)
 
     local shadow = Instance.new("ImageLabel")
-    shadow.Name                  = "_Shadow"
-    shadow.AnchorPoint           = Vector2.new(0.5, 0.5)
+    shadow.Name                   = "_Shadow"
+    shadow.AnchorPoint            = Vector2.new(0.5, 0.5)
     shadow.BackgroundTransparency = 1
-    shadow.Image                 = "rbxassetid://6014261993"  -- shadow radial asset
-    shadow.ImageColor3           = options.Color or Color3.fromRGB(0, 0, 0)
-    shadow.ImageTransparency     = 1 - opacity
-    shadow.ScaleType             = Enum.ScaleType.Slice
-    shadow.SliceCenter           = Rect.new(49, 49, 450, 450)
-    shadow.Size                  = UDim2.new(1, size * 2, 1, size * 2)
-    shadow.Position              = UDim2.new(
-        0.5, offset.X,
-        0.5, offset.Y
-    )
-    shadow.ZIndex                = instance.ZIndex - 1
-    shadow.Parent                = instance.Parent
-
-    -- Pastikan shadow di bawah instance
-    shadow.ZIndex = math.max(1, instance.ZIndex - 1)
+    shadow.Image                  = "rbxassetid://6014261993"
+    shadow.ImageColor3            = options.Color or Color3.fromRGB(0, 0, 0)
+    shadow.ImageTransparency      = 1 - opacity
+    shadow.ScaleType              = Enum.ScaleType.Slice
+    shadow.SliceCenter            = Rect.new(49, 49, 450, 450)
+    shadow.Size                   = UDim2.new(1, size * 2, 1, size * 2)
+    shadow.Position               = UDim2.new(0.5, offset.X, 0.5, offset.Y)
+    shadow.ZIndex                 = math.max(1, instance.ZIndex - 1)
+    shadow.Parent                 = instance.Parent
 
     return shadow
 end
@@ -249,7 +302,7 @@ end
 --[[
     Functions.ApplyGradient(instance, options)
     Tambahkan UIGradient ke instance.
-    
+
     @param options {
         Color: ColorSequence,
         Transparency: NumberSequence,
@@ -264,7 +317,6 @@ function Functions.ApplyGradient(instance, options)
     if options.Color then
         gradient.Color = options.Color
     else
-        -- Default: subtle dark-to-transparent vertical
         gradient.Color = ColorSequence.new({
             ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 255, 255)),
             ColorSequenceKeypoint.new(1, Color3.fromRGB(200, 200, 200)),
@@ -284,7 +336,7 @@ end
 --[[
     Functions.ApplyPadding(instance, paddings)
     Tambahkan UIPadding ke instance.
-    
+
     @param paddings {
         Top: number, Bottom: number, Left: number, Right: number
     }
@@ -315,12 +367,12 @@ end
 function Functions.ApplyListLayout(instance, options)
     options = options or {}
     local layout = Instance.new("UIListLayout")
-    layout.SortOrder          = options.SortOrder or Enum.SortOrder.LayoutOrder
-    layout.FillDirection      = options.FillDirection or Enum.FillDirection.Vertical
+    layout.SortOrder           = options.SortOrder or Enum.SortOrder.LayoutOrder
+    layout.FillDirection       = options.FillDirection or Enum.FillDirection.Vertical
     layout.HorizontalAlignment = options.HorizontalAlignment or Enum.HorizontalAlignment.Left
-    layout.VerticalAlignment  = options.VerticalAlignment or Enum.VerticalAlignment.Top
-    layout.Padding            = options.Padding or UDim.new(0, Config.UI.ComponentGap)
-    layout.Parent             = instance
+    layout.VerticalAlignment   = options.VerticalAlignment or Enum.VerticalAlignment.Top
+    layout.Padding             = options.Padding or UDim.new(0, Config.UI.ComponentGap)
+    layout.Parent              = instance
     return layout
 end
 
@@ -331,16 +383,135 @@ end
 function Functions.ApplyGridLayout(instance, options)
     options = options or {}
     local grid = Instance.new("UIGridLayout")
-    grid.SortOrder         = options.SortOrder or Enum.SortOrder.LayoutOrder
-    grid.CellSize          = options.CellSize or UDim2.new(0.5, -6, 0, 40)
-    grid.CellPadding       = options.CellPadding or UDim2.new(0, 6, 0, 6)
+    grid.SortOrder             = options.SortOrder or Enum.SortOrder.LayoutOrder
+    grid.CellSize              = options.CellSize or UDim2.new(0.5, -6, 0, 40)
+    grid.CellPadding           = options.CellPadding or UDim2.new(0, 6, 0, 6)
     grid.FillDirectionMaxCells = options.MaxCells or 2
-    grid.Parent            = instance
+    grid.Parent                = instance
     return grid
 end
 
 -- ============================================================
--- UTILITY FUNCTIONS
+-- TWEEN SHORTCUT
+-- FIX (Bug 1): sebelumnya tidak ada, dibutuhkan oleh Loading.lua,
+-- Modals.lua, Notifications.lua, SearchBar.lua, Tooltips.lua
+-- ============================================================
+
+--[[
+    Functions.Tween(instance, goals, duration, style, direction)
+    Shortcut membuat dan langsung memainkan tween.
+    Menggunakan pcall agar tidak crash jika instance sudah dihapus.
+
+    @param instance  Instance
+    @param goals     table           -- { Property = targetValue }
+    @param duration  number          -- detik (default 0.2)
+    @param style     Enum.EasingStyle
+    @param direction Enum.EasingDirection
+]]
+function Functions.Tween(instance, goals, duration, style, direction)
+    if not instance or not instance.Parent then return end
+    local ts = game:GetService("TweenService")
+    local info = TweenInfo.new(
+        duration  or 0.2,
+        style     or Enum.EasingStyle.Quart,
+        direction or Enum.EasingDirection.Out
+    )
+    local ok, tween = pcall(function()
+        return ts:Create(instance, info, goals)
+    end)
+    if ok and tween then
+        tween:Play()
+        return tween
+    end
+end
+
+-- ============================================================
+-- SAFE CALL
+-- FIX (Bug 1): sebelumnya tidak ada, dibutuhkan oleh Modals.lua,
+-- Notifications.lua, SearchBar.lua sebagai wrapper callback
+-- ============================================================
+
+--[[
+    Functions.SafeCall(fn, ...) → ok, result
+    Panggil fungsi dengan pcall.
+    Tidak crash jika fn = nil atau bukan function.
+
+    @param fn   function | any
+    @param ...  argumen
+    @return ok boolean, result any
+]]
+function Functions.SafeCall(fn, ...)
+    if type(fn) ~= "function" then return false, nil end
+    return pcall(fn, ...)
+end
+
+-- ============================================================
+-- TABLE REMOVE BY VALUE
+-- FIX (Bug 1): sebelumnya tidak ada, dibutuhkan oleh Notifications.lua
+-- (hapus notif dari activeNotifs), Cards.lua, Separators.lua
+-- ============================================================
+
+--[[
+    Functions.TableRemove(tbl, value) → boolean
+    Hapus value pertama yang cocok dari array tbl.
+    Berbeda dari table.remove() yang pakai index.
+
+    @param tbl    table
+    @param value  any  -- nilai yang ingin dihapus
+    @return true jika ditemukan dan dihapus, false jika tidak ada
+]]
+function Functions.TableRemove(tbl, value)
+    for i, v in ipairs(tbl) do
+        if v == value then
+            table.remove(tbl, i)
+            return true
+        end
+    end
+    return false
+end
+
+-- ============================================================
+-- STRING TRIM
+-- FIX (Bug 1): sebelumnya tidak ada, dibutuhkan oleh FeedbackUI.lua,
+-- BugReport.lua, SuggestionReport.lua sebelum validasi input user
+-- ============================================================
+
+--[[
+    Functions.Trim(str) → string
+    Hapus whitespace (spasi, tab, newline) di awal dan akhir string.
+
+    @param str  string | any  (non-string di-tostring dulu)
+    @return string tanpa whitespace di kedua ujung
+]]
+function Functions.Trim(str)
+    return tostring(str or ""):match("^%s*(.-)%s*$")
+end
+
+-- ============================================================
+-- PARENT GUI HELPER
+-- FIX (Bug 1): sebelumnya tidak ada, dibutuhkan oleh Notifications.lua
+-- di fungsi ensureGui() untuk memasang ScreenGui ke CoreGui/PlayerGui
+-- ============================================================
+
+--[[
+    Functions.ParentGui(gui)
+    Pasang ScreenGui ke CoreGui (lebih stabil), fallback ke PlayerGui
+    jika CoreGui tidak tersedia (misal bukan executor environment).
+
+    @param gui  ScreenGui
+]]
+function Functions.ParentGui(gui)
+    local ok = pcall(function()
+        gui.Parent = game:GetService("CoreGui")
+    end)
+    if not ok then
+        local player = game:GetService("Players").LocalPlayer
+        gui.Parent = player:WaitForChild("PlayerGui", 5)
+    end
+end
+
+-- ============================================================
+-- UTILITY FUNCTIONS (tidak berubah dari versi sebelumnya)
 -- ============================================================
 
 --[[
@@ -358,7 +529,9 @@ end
     Cek apakah instance masih valid dan belum dihapus.
 ]]
 function Functions.IsValid(instance)
-    return instance ~= nil and typeof(instance) == "Instance" and instance.Parent ~= nil
+    return instance ~= nil
+        and typeof(instance) == "Instance"
+        and instance.Parent ~= nil
 end
 
 --[[
@@ -468,7 +641,6 @@ end
 function Functions.FormatNumber(number, decimals)
     decimals = decimals or 0
     local formatted = string.format("%." .. decimals .. "f", number)
-    -- Tambah koma tiap 3 digit
     local result = formatted:reverse():gsub("(%d%d%d)", "%1,"):reverse()
     if result:sub(1, 1) == "," then result = result:sub(2) end
     return result
@@ -477,7 +649,7 @@ end
 --[[
     Functions.Debounce(fn, delay) → function
     Bungkus fungsi dengan debounce agar tidak spam-call.
-    
+
     @param fn     function  -- fungsi asli
     @param delay  number    -- cooldown dalam detik
 ]]

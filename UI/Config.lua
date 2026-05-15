@@ -299,4 +299,48 @@ Config.Flags = {
     Version         = "1.0.0",
 }
 
+-- ============================================================
+-- ALIAS UNTUK KOMPATIBILITAS MODUL OVERLAY
+-- FIX (Bug 3): Modul Loading.lua, Modals.lua, SearchBar.lua, Cards.lua
+-- memanggil keys yang berbeda dari yang ada di Config.
+-- Alias ini menjembatani perbedaan nama tanpa mengubah kode modul-modul tersebut.
+--
+-- Pola penamaan:
+--   Config.UI.TitleFont   → dipakai overlay modules
+--   Config.Font.Title     → nama asli di Config.Font
+-- ============================================================
+
+-- ── Font aliases ────────────────────────────────────────────
+-- Loading.lua, Modals.lua, Notifications.lua, SearchSystem.lua pakai:
+--   Config.UI.TitleFont, Config.UI.Font, Config.UI.SmallFont,
+--   Config.UI.FontSize, Config.UI.TitleSize
+Config.UI.TitleFont  = Config.Font.Title                 -- Enum.Font.GothamBold
+Config.UI.Font       = Config.Font.Body                  -- Enum.Font.Gotham
+Config.UI.SmallFont  = Config.Font.Small                 -- Enum.Font.Gotham
+Config.UI.FontSize   = Config.Font.Size.ComponentLabel   -- 13
+Config.UI.TitleSize  = Config.Font.Size.Title            -- 16
+
+-- ── UI size aliases ─────────────────────────────────────────
+-- SearchBar.lua, Cards.lua, Separators.lua pakai:
+--   Config.UI.ElementCorner, Config.UI.ElementHeight
+Config.UI.ElementCorner = Config.UI.CardRadius           -- 10
+Config.UI.ElementHeight = Config.UI.ComponentHeight      -- 42
+
+-- ScrollBarWidth: dipakai SearchSystem.lua
+-- (Config.UI.ScrollBarWidth belum ada di tabel asli)
+Config.UI.ScrollBarWidth = 3
+
+-- ── Notification aliases ─────────────────────────────────────
+-- Notifications.lua pakai:
+--   Config.Notification.Duration    → DisplayTime
+--   Config.Notification.AnimDuration → Animation.NotifDuration
+--   Config.Notification.Padding     → Gap
+--   Config.Notification.RightOffset → EdgeOffset.X
+--   Config.Notification.BottomOffset → EdgeOffset.Y
+Config.Notification.Duration     = Config.Notification.DisplayTime      -- 3.5
+Config.Notification.AnimDuration = Config.Animation.NotifDuration        -- 0.2
+Config.Notification.Padding      = Config.Notification.Gap               -- 8
+Config.Notification.RightOffset  = Config.Notification.EdgeOffset.X      -- 16
+Config.Notification.BottomOffset = Config.Notification.EdgeOffset.Y      -- 16
+
 return Config

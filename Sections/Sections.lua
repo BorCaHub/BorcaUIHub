@@ -2,6 +2,17 @@
     BorcaUIHub — Sections/Sections.lua
     Membagi isi tab menjadi blok-blok terorganisir.
     Setiap section punya judul, deskripsi opsional, dan area konten.
+
+    FIX (Bug 5):
+    - Tambah field Elements = {} ke sectionObj
+      SEBELUMNYA: sectionObj tidak punya field Elements
+                  → Cards.CreateCard() dan Separators.CreateSeparator() crash
+                    dengan "attempt to get length of nil value" pada baris
+                    `#section.Elements + 1`
+                  → SearchSystem juga tidak bisa scan elemen (punya fallback or {})
+      SEKARANG:   Elements = {} diinisialisasi di sectionObj.
+                  Cards dan Separators bisa insert/remove dari tabel ini.
+                  SearchSystem bisa scan elemen melalui section.Elements.
 ]]
 
 local Sections = {}
@@ -42,6 +53,7 @@ Sections._registry = {}
         Frame:        Frame     -- container utama section
         Header:       Frame     -- header (judul + kontrol)
         Content:      Frame     -- area konten (tempat komponen dimasukkan)
+        Elements:     table     -- daftar elemen yang ditambahkan (Cards, Separators, dll)
         Id:           string
         Toggle:       function  -- toggle collapse/expand
         SetTitle:     function
@@ -319,6 +331,15 @@ function Sections.Create(parent, options)
         Frame   = outerFrame,
         Header  = header,
         Content = content,
+
+        -- FIX (Bug 5): Elements ditambahkan sebagai tabel kosong.
+        -- SEBELUMNYA: tidak ada field ini → Cards.CreateCard() dan
+        --             Separators.CreateSeparator() crash karena mencoba
+        --             `#section.Elements` pada nil value.
+        -- SEKARANG:   tabel ini diisi oleh Cards dan Separators saat
+        --             elemen dibuat (table.insert) atau dihapus (TableRemove).
+        --             SearchSystem juga scan tabel ini untuk hasil pencarian.
+        Elements = {},
 
         -- Toggle collapse/expand
         Toggle = ToggleCollapse,
